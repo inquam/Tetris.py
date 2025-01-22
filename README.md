@@ -4,6 +4,6 @@
 * **Left/Right** arrows to move
 * **Up arrow** to rotate
 * **Down arrow** to accelerate drop (hold to continue accelerating)
-* **Shift + Down** or **Spacebar** for instant drop
+* **Spacebar** for instant drop
 
 ![Tetris](tetris.png)
