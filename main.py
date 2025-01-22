@@ -1,4 +1,4 @@
-import tkinter as tk
+import pygame
 import random
 from enum import Enum
 import time
@@ -24,47 +24,41 @@ class TetrisGame:
         [[1, 1, 0], [0, 1, 1]],  # S
         [[0, 1, 1], [1, 1, 0]]  # Z
     ]
-    COLORS = ['cyan', 'yellow', 'purple', 'orange', 'blue', 'green', 'red']
+    COLORS = [
+        (0, 255, 255),  # cyan
+        (255, 255, 0),  # yellow
+        (255, 0, 255),  # purple
+        (255, 165, 0),  # orange
+        (0, 0, 255),  # blue
+        (0, 255, 0),  # green
+        (255, 0, 0)  # red
+    ]
+    # Official Tetris scoring system
+    SCORING = {
+        1: 100,  # Single line
+        2: 300,  # Double
+        3: 500,  # Triple
+        4: 800  # Tetris
+    }
+    LINES_PER_LEVEL = 10  # Number of lines needed to advance to next level
 
     def __init__(self):
-        self.window = tk.Tk()
-        self.window.title("Tetris")
-        self.window.resizable(False, False)
+        pygame.init()
+        pygame.display.set_caption("Tetris")
 
-        # Configure key repeat delay
-        self.window.bind_all('<Key>', self.handle_keypress)
-        self.pressed_keys = set()
+        # Calculate window dimensions
+        self.sidebar_width = 200
+        self.window_width = self.BLOCK_SIZE * self.BOARD_WIDTH + self.sidebar_width
+        self.window_height = self.BLOCK_SIZE * self.BOARD_HEIGHT
 
-        # Create main game frame
-        self.game_frame = tk.Frame(self.window)
-        self.game_frame.pack(side=tk.LEFT)
+        # Create display surfaces
+        self.window = pygame.display.set_mode((self.window_width, self.window_height))
+        self.game_surface = pygame.Surface((self.BLOCK_SIZE * self.BOARD_WIDTH, self.window_height))
+        self.preview_surface = pygame.Surface(
+            (self.BLOCK_SIZE * self.PREVIEW_SIZE, self.BLOCK_SIZE * self.PREVIEW_SIZE))
 
-        # Create game canvas
-        self.canvas = tk.Canvas(
-            self.game_frame,
-            width=self.BLOCK_SIZE * self.BOARD_WIDTH,
-            height=self.BLOCK_SIZE * self.BOARD_HEIGHT,
-            bg='black'
-        )
-        self.canvas.pack()
-
-        # Create side panel
-        self.side_panel = tk.Frame(self.window)
-        self.side_panel.pack(side=tk.LEFT, padx=20)
-
-        # Score display
-        self.score_var = tk.StringVar(value="Score: 0")
-        self.score_label = tk.Label(self.side_panel, textvariable=self.score_var)
-        self.score_label.pack(pady=10)
-
-        # Next piece preview
-        self.preview_canvas = tk.Canvas(
-            self.side_panel,
-            width=self.BLOCK_SIZE * self.PREVIEW_SIZE,
-            height=self.BLOCK_SIZE * self.PREVIEW_SIZE,
-            bg='black'
-        )
-        self.preview_canvas.pack()
+        # Initialize font
+        self.font = pygame.font.Font(None, 36)
 
         # Game state
         self.board = [[0 for _ in range(self.BOARD_WIDTH)] for _ in range(self.BOARD_HEIGHT)]
@@ -73,26 +67,19 @@ class TetrisGame:
         self.current_shape_index = None
         self.next_shape_index = None
         self.score = 0
+        self.level = 1
+        self.lines_cleared = 0
         self.game_over = False
-        self.last_down_press = 0
 
-        # Bind keys
-        self.window.bind('<Left>', lambda e: self.move(Direction.LEFT))
-        self.window.bind('<Right>', lambda e: self.move(Direction.RIGHT))
-        self.window.bind('<Down>', self.handle_down_press)
-        self.window.bind('<KeyRelease-Down>', self.handle_down_release)
-        self.window.bind('<Up>', self.rotate)
-        self.window.bind('<space>', self.drop)
-        self.window.bind('<Shift-Down>', self.drop)  # Shift + Down for instant drop
-
-        # Game state variables for down key handling
+        # Timer for handling key repeats
         self.down_pressed = False
-        self.fast_drop = False
+        self.last_move_time = 0
+        self.move_delay = 100  # milliseconds
+        self.clock = pygame.time.Clock()
 
         # Start game
         self.next_shape_index = random.randint(0, len(self.SHAPES) - 1)
         self.spawn_piece()
-        self.update()
 
     def spawn_piece(self):
         if self.next_shape_index is None:
@@ -105,39 +92,14 @@ class TetrisGame:
 
         # Generate next piece
         self.next_shape_index = random.randint(0, len(self.SHAPES) - 1)
-        self.draw_preview()
 
         if self.check_collision():
             self.game_over = True
-
-    def draw_preview(self):
-        self.preview_canvas.delete('all')
-        next_piece = self.SHAPES[self.next_shape_index]
-
-        # Calculate centering offsets
-        piece_height = len(next_piece)
-        piece_width = len(next_piece[0])
-        offset_x = (self.PREVIEW_SIZE - piece_width) * self.BLOCK_SIZE // 2
-        offset_y = (self.PREVIEW_SIZE - piece_height) * self.BLOCK_SIZE // 2
-
-        for i in range(piece_height):
-            for j in range(piece_width):
-                if next_piece[i][j]:
-                    x1 = offset_x + j * self.BLOCK_SIZE
-                    y1 = offset_y + i * self.BLOCK_SIZE
-                    x2 = x1 + self.BLOCK_SIZE
-                    y2 = y1 + self.BLOCK_SIZE
-                    self.preview_canvas.create_rectangle(
-                        x1, y1, x2, y2,
-                        fill=self.COLORS[self.next_shape_index],
-                        outline='white'
-                    )
 
     def get_ghost_position(self):
         if not self.current_piece:
             return None
 
-        # Find the lowest possible position
         ghost_pos = self.current_pos[:]
         while not self.check_collision(test_pos=ghost_pos):
             ghost_pos[0] += 1
@@ -146,7 +108,18 @@ class TetrisGame:
         return ghost_pos
 
     def draw(self):
-        self.canvas.delete('all')
+        # Clear surfaces
+        self.window.fill((0, 0, 0))  # Main window background
+        self.game_surface.fill((20, 20, 35))  # Slightly lighter background for game field
+        self.preview_surface.fill((0, 0, 0))
+
+        # Draw border around game field
+        pygame.draw.rect(
+            self.game_surface,
+            (40, 40, 60),  # Border color
+            (0, 0, self.BLOCK_SIZE * self.BOARD_WIDTH, self.window_height),
+            2  # Border thickness
+        )
 
         # Draw ghost piece
         ghost_pos = self.get_ghost_position()
@@ -178,25 +151,72 @@ class TetrisGame:
                             self.COLORS[self.current_shape_index]
                         )
 
-    def draw_block(self, row, col, color, ghost=False):
-        x1 = col * self.BLOCK_SIZE
-        y1 = row * self.BLOCK_SIZE
-        x2 = x1 + self.BLOCK_SIZE
-        y2 = y1 + self.BLOCK_SIZE
+        # Draw preview piece
+        next_piece = self.SHAPES[self.next_shape_index]
+        piece_height = len(next_piece)
+        piece_width = len(next_piece[0])
+        offset_x = (self.PREVIEW_SIZE - piece_width) * self.BLOCK_SIZE // 2
+        offset_y = (self.PREVIEW_SIZE - piece_height) * self.BLOCK_SIZE // 2
 
+        for i in range(piece_height):
+            for j in range(piece_width):
+                if next_piece[i][j]:
+                    pygame.draw.rect(
+                        self.preview_surface,
+                        self.COLORS[self.next_shape_index],
+                        (
+                            offset_x + j * self.BLOCK_SIZE,
+                            offset_y + i * self.BLOCK_SIZE,
+                            self.BLOCK_SIZE - 1,
+                            self.BLOCK_SIZE - 1
+                        )
+                    )
+
+        # Draw score and level
+        score_text = self.font.render(f"Score: {self.score}", True, (255, 255, 255))
+        level_text = self.font.render(f"Level: {self.level}", True, (255, 255, 255))
+        lines_text = self.font.render(f"Lines: {self.lines_cleared}", True, (255, 255, 255))
+
+        # Draw game over
+        if self.game_over:
+            game_over_text = self.font.render("Game Over!", True, (255, 255, 255))
+            text_rect = game_over_text.get_rect(
+                center=(self.BLOCK_SIZE * self.BOARD_WIDTH // 2, self.window_height // 2))
+            self.game_surface.blit(game_over_text, text_rect)
+
+        # Combine surfaces
+        self.window.blit(self.game_surface, (0, 0))
+        self.window.blit(score_text, (self.BLOCK_SIZE * self.BOARD_WIDTH + 20, 20))
+        self.window.blit(level_text, (self.BLOCK_SIZE * self.BOARD_WIDTH + 20, 60))
+        self.window.blit(lines_text, (self.BLOCK_SIZE * self.BOARD_WIDTH + 20, 100))
+        self.window.blit(self.preview_surface, (self.BLOCK_SIZE * self.BOARD_WIDTH + 20, 140))
+
+        pygame.display.flip()
+
+    def draw_block(self, row, col, color, ghost=False):
         if ghost:
             # Draw only the outline for ghost piece
-            self.canvas.create_rectangle(
-                x1, y1, x2, y2,
-                outline=color,
-                width=2,
-                fill=''
+            pygame.draw.rect(
+                self.game_surface,
+                color,
+                (
+                    col * self.BLOCK_SIZE,
+                    row * self.BLOCK_SIZE,
+                    self.BLOCK_SIZE - 1,
+                    self.BLOCK_SIZE - 1
+                ),
+                1
             )
         else:
-            self.canvas.create_rectangle(
-                x1, y1, x2, y2,
-                fill=color,
-                outline='white'
+            pygame.draw.rect(
+                self.game_surface,
+                color,
+                (
+                    col * self.BLOCK_SIZE,
+                    row * self.BLOCK_SIZE,
+                    self.BLOCK_SIZE - 1,
+                    self.BLOCK_SIZE - 1
+                )
             )
 
     def check_collision(self, test_pos=None):
@@ -224,34 +244,30 @@ class TetrisGame:
     def clear_lines(self):
         lines_cleared = 0
         i = self.BOARD_HEIGHT - 1
+        rows_to_clear = []
+
+        # Find complete lines
         while i >= 0:
             if all(self.board[i]):
                 lines_cleared += 1
-                for k in range(i, 0, -1):
-                    self.board[k] = self.board[k - 1][:]
-                self.board[0] = [0] * self.BOARD_WIDTH
-            else:
-                i -= 1
+                rows_to_clear.append(i)
+            i -= 1
 
-        if lines_cleared:
-            self.score += lines_cleared * 100
-            self.score_var.set(f"Score: {self.score}")
+        # Clear the lines and update score
+        if lines_cleared > 0:
+            # Update score based on number of lines cleared and current level
+            self.score += self.SCORING[lines_cleared] * self.level
+            self.lines_cleared += lines_cleared
 
-    def handle_down_press(self, event):
-        if self.game_over:
-            return
-        self.down_pressed = True
-        self.fast_drop = True
-        self.accelerate_drop()
+            # Update level
+            new_level = (self.lines_cleared // self.LINES_PER_LEVEL) + 1
+            if new_level != self.level:
+                self.level = new_level
 
-    def handle_down_release(self, event):
-        self.down_pressed = False
-        self.fast_drop = False
-
-    def accelerate_drop(self):
-        if self.down_pressed and self.fast_drop and not self.game_over:
-            self.move(Direction.DOWN)
-            self.window.after(50, self.accelerate_drop)  # Faster drop speed while down is pressed
+            # Remove the cleared lines
+            for row in sorted(rows_to_clear, reverse=True):
+                self.board.pop(row)
+                self.board.insert(0, [0] * self.BOARD_WIDTH)
 
     def move(self, direction):
         if self.game_over:
@@ -273,27 +289,19 @@ class TetrisGame:
                 self.clear_lines()
                 self.spawn_piece()
 
-        self.draw()
-
-    def rotate(self, event):
+    def rotate(self):
         if self.game_over:
             return
 
-        # Save the current piece state
         old_piece = [row[:] for row in self.current_piece]
-
-        # Rotate the piece (90 degrees clockwise)
         rows = len(self.current_piece)
         cols = len(self.current_piece[0])
         self.current_piece = [[self.current_piece[rows - 1 - j][i] for j in range(rows)] for i in range(cols)]
 
-        # If the rotation causes a collision, revert back
         if self.check_collision():
             self.current_piece = old_piece
 
-        self.draw()
-
-    def drop(self, event):
+    def drop(self):
         if self.game_over:
             return
 
@@ -304,27 +312,58 @@ class TetrisGame:
         self.merge_piece()
         self.clear_lines()
         self.spawn_piece()
-        self.draw()
 
-    def handle_keypress(self, event):
-        # Track pressed keys to prevent key repeat delay
-        self.pressed_keys.add(event.keysym)
+    def handle_input(self):
+        current_time = pygame.time.get_ticks()
+        keys = pygame.key.get_pressed()
 
-    def update(self):
-        if not self.game_over:
-            self.move(Direction.DOWN)
-            self.window.after(1000, self.update)
-        else:
-            self.canvas.create_text(
-                self.BOARD_WIDTH * self.BLOCK_SIZE // 2,
-                self.BOARD_HEIGHT * self.BLOCK_SIZE // 2,
-                text="Game Over!",
-                fill="white",
-                font=("Arial", 24)
-            )
+        # Handle continuous movement with delay
+        if current_time - self.last_move_time > self.move_delay:
+            if keys[pygame.K_LEFT]:
+                self.move(Direction.LEFT)
+                self.last_move_time = current_time
+            if keys[pygame.K_RIGHT]:
+                self.move(Direction.RIGHT)
+                self.last_move_time = current_time
+            if keys[pygame.K_DOWN]:
+                self.move(Direction.DOWN)
+                self.last_move_time = current_time
 
     def run(self):
-        self.window.mainloop()
+        last_drop_time = pygame.time.get_ticks()
+
+        running = True
+        while running:
+            current_time = pygame.time.get_ticks()
+
+            # Calculate drop delay based on level (speeds up as level increases)
+            drop_delay = max(1000 - (self.level - 1) * 50, 100)  # Minimum 100ms delay
+
+            # Handle events
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_UP:
+                        self.rotate()
+                    elif event.key == pygame.K_SPACE:
+                        self.drop()
+
+            # Handle continuous input
+            self.handle_input()
+
+            # Automatic drop
+            if current_time - last_drop_time > drop_delay:
+                self.move(Direction.DOWN)
+                last_drop_time = current_time
+
+            # Draw game state
+            self.draw()
+
+            # Control game speed
+            self.clock.tick(60)
+
+        pygame.quit()
 
 
 if __name__ == "__main__":
